@@ -44,6 +44,7 @@ const upperdirKey = "containerd.io/snapshot/overlay.upperdir"
 type SnapshotterConfig struct {
 	asyncRemove   bool
 	upperdirLabel bool
+	ms            *storage.MetaStore
 	mountOptions  []string
 }
 
@@ -77,17 +78,19 @@ func WithMountOptions(options []string) Opt {
 	}
 }
 
+func WithMetaStore(ms *storage.MetaStore) Opt {
+	return func(config *SnapshotterConfig) error {
+		config.ms = ms
+		return nil
+	}
+}
+
 type Snapshotter struct {
 	root          string
 	ms            *storage.MetaStore
 	asyncRemove   bool
 	upperdirLabel bool
 	options       []string
-}
-
-// Access Functions
-func (o *Snapshotter) GetMs() *storage.MetaStore {
-	return o.ms
 }
 
 // NewSnapshotter returns a Snapshotter which uses overlayfs. The overlayfs
@@ -111,9 +114,11 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
 	if !supportsDType {
 		return nil, fmt.Errorf("%s does not support d_type. If the backing filesystem is xfs, please reformat with ftype=1 to enable d_type support", root)
 	}
-	ms, err := storage.NewMetaStore(filepath.Join(root, "metadata.db"))
-	if err != nil {
-		return nil, err
+	if config.ms == nil {
+		config.ms, err = storage.NewMetaStore(filepath.Join(root, "metadata.db"))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if err := os.Mkdir(filepath.Join(root, "snapshots"), 0700); err != nil && !os.IsExist(err) {
@@ -137,7 +142,7 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
 
 	return &Snapshotter{
 		root:          root,
-		ms:            ms,
+		ms:            config.ms,
 		asyncRemove:   config.asyncRemove,
 		upperdirLabel: config.upperdirLabel,
 		options:       config.mountOptions,
