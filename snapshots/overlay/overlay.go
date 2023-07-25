@@ -44,6 +44,7 @@ const upperdirKey = "containerd.io/snapshot/overlay.upperdir"
 type SnapshotterConfig struct {
 	asyncRemove   bool
 	upperdirLabel bool
+	ms            *storage.MetaStore
 }
 
 // Opt is an option to configure the overlay snapshotter
@@ -67,7 +68,14 @@ func WithUpperdirLabel(config *SnapshotterConfig) error {
 	return nil
 }
 
-type snapshotter struct {
+func WithMetaStore(ms *storage.MetaStore) Opt {
+	return func(config *SnapshotterConfig) error {
+		config.ms = ms
+		return nil
+	}
+}
+
+type Snapshotter struct {
 	root          string
 	ms            *storage.MetaStore
 	asyncRemove   bool
@@ -97,9 +105,14 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
 	if !supportsDType {
 		return nil, fmt.Errorf("%s does not support d_type. If the backing filesystem is xfs, please reformat with ftype=1 to enable d_type support", root)
 	}
-	ms, err := storage.NewMetaStore(filepath.Join(root, "metadata.db"))
-	if err != nil {
-		return nil, err
+
+	if config.ms == nil {
+		if err != nil {
+			config.ms, err = storage.NewMetaStore(filepath.Join(root, "metadata.db"))
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	if err := os.Mkdir(filepath.Join(root, "snapshots"), 0700); err != nil && !os.IsExist(err) {
@@ -111,9 +124,9 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
 		logrus.WithError(err).Warnf("cannot detect whether \"userxattr\" option needs to be used, assuming to be %v", userxattr)
 	}
 
-	return &snapshotter{
+	return &Snapshotter{
 		root:          root,
-		ms:            ms,
+		ms:            config.ms,
 		asyncRemove:   config.asyncRemove,
 		upperdirLabel: config.upperdirLabel,
 		indexOff:      supportsIndex(),
@@ -126,7 +139,7 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
 //
 // Should be used for parent resolution, existence checks and to discern
 // the kind of snapshot.
-func (o *snapshotter) Stat(ctx context.Context, key string) (info snapshots.Info, err error) {
+func (o *Snapshotter) Stat(ctx context.Context, key string) (info snapshots.Info, err error) {
 	var id string
 	if err := o.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
 		id, info, _, err = storage.GetInfo(ctx, key)
@@ -144,7 +157,7 @@ func (o *snapshotter) Stat(ctx context.Context, key string) (info snapshots.Info
 	return info, nil
 }
 
-func (o *snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpaths ...string) (newInfo snapshots.Info, err error) {
+func (o *Snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpaths ...string) (newInfo snapshots.Info, err error) {
 	err = o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
 		newInfo, err = storage.UpdateInfo(ctx, info, fieldpaths...)
 		if err != nil {
@@ -172,7 +185,7 @@ func (o *snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpath
 // "upper") directory and may take some time.
 //
 // For committed snapshots, the value is returned from the metadata database.
-func (o *snapshotter) Usage(ctx context.Context, key string) (_ snapshots.Usage, err error) {
+func (o *Snapshotter) Usage(ctx context.Context, key string) (_ snapshots.Usage, err error) {
 	var (
 		usage snapshots.Usage
 		info  snapshots.Info
@@ -197,11 +210,11 @@ func (o *snapshotter) Usage(ctx context.Context, key string) (_ snapshots.Usage,
 	return usage, nil
 }
 
-func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
+func (o *Snapshotter) Prepare(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
 	return o.createSnapshot(ctx, snapshots.KindActive, key, parent, opts)
 }
 
-func (o *snapshotter) View(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
+func (o *Snapshotter) View(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
 	return o.createSnapshot(ctx, snapshots.KindView, key, parent, opts)
 }
 
@@ -209,7 +222,7 @@ func (o *snapshotter) View(ctx context.Context, key, parent string, opts ...snap
 // called on an read-write or readonly transaction.
 //
 // This can be used to recover mounts after calling View or Prepare.
-func (o *snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount, err error) {
+func (o *Snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount, err error) {
 	var s storage.Snapshot
 	if err := o.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
 		s, err = storage.GetSnapshot(ctx, key)
@@ -223,7 +236,7 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount, 
 	return o.mounts(s), nil
 }
 
-func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snapshots.Opt) error {
+func (o *Snapshotter) Commit(ctx context.Context, name, key string, opts ...snapshots.Opt) error {
 	return o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
 		// grab the existing id
 		id, _, _, err := storage.GetInfo(ctx, key)
@@ -246,7 +259,7 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 // Remove abandons the snapshot identified by key. The snapshot will
 // immediately become unavailable and unrecoverable. Disk space will
 // be freed up on the next call to `Cleanup`.
-func (o *snapshotter) Remove(ctx context.Context, key string) (err error) {
+func (o *Snapshotter) Remove(ctx context.Context, key string) (err error) {
 	var removals []string
 	// Remove directories after the transaction is closed, failures must not
 	// return error since the transaction is committed with the removal
@@ -277,7 +290,7 @@ func (o *snapshotter) Remove(ctx context.Context, key string) (err error) {
 }
 
 // Walk the snapshots.
-func (o *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...string) error {
+func (o *Snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...string) error {
 	return o.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
 		if o.upperdirLabel {
 			return storage.WalkInfo(ctx, func(ctx context.Context, info snapshots.Info) error {
@@ -297,7 +310,7 @@ func (o *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...str
 }
 
 // Cleanup cleans up disk resources from removed or abandoned snapshots
-func (o *snapshotter) Cleanup(ctx context.Context) error {
+func (o *Snapshotter) Cleanup(ctx context.Context) error {
 	cleanup, err := o.cleanupDirectories(ctx)
 	if err != nil {
 		return err
@@ -312,7 +325,7 @@ func (o *snapshotter) Cleanup(ctx context.Context) error {
 	return nil
 }
 
-func (o *snapshotter) cleanupDirectories(ctx context.Context) (_ []string, err error) {
+func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, err error) {
 	var cleanupDirs []string
 	// Get a write transaction to ensure no other write transaction can be entered
 	// while the cleanup is scanning.
@@ -325,7 +338,7 @@ func (o *snapshotter) cleanupDirectories(ctx context.Context) (_ []string, err e
 	return cleanupDirs, nil
 }
 
-func (o *snapshotter) getCleanupDirectories(ctx context.Context) ([]string, error) {
+func (o *Snapshotter) getCleanupDirectories(ctx context.Context) ([]string, error) {
 	ids, err := storage.IDMap(ctx)
 	if err != nil {
 		return nil, err
@@ -354,7 +367,7 @@ func (o *snapshotter) getCleanupDirectories(ctx context.Context) ([]string, erro
 	return cleanup, nil
 }
 
-func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, key, parent string, opts []snapshots.Opt) (_ []mount.Mount, err error) {
+func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, key, parent string, opts []snapshots.Opt) (_ []mount.Mount, err error) {
 	var (
 		s        storage.Snapshot
 		td, path string
@@ -414,7 +427,7 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 	return o.mounts(s), nil
 }
 
-func (o *snapshotter) prepareDirectory(ctx context.Context, snapshotDir string, kind snapshots.Kind) (string, error) {
+func (o *Snapshotter) prepareDirectory(ctx context.Context, snapshotDir string, kind snapshots.Kind) (string, error) {
 	td, err := os.MkdirTemp(snapshotDir, "new-")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp dir: %w", err)
@@ -433,7 +446,7 @@ func (o *snapshotter) prepareDirectory(ctx context.Context, snapshotDir string, 
 	return td, nil
 }
 
-func (o *snapshotter) mounts(s storage.Snapshot) []mount.Mount {
+func (o *Snapshotter) mounts(s storage.Snapshot) []mount.Mount {
 	if len(s.ParentIDs) == 0 {
 		// if we only have one layer/no parents then just return a bind mount as overlay
 		// will not work
@@ -498,16 +511,16 @@ func (o *snapshotter) mounts(s storage.Snapshot) []mount.Mount {
 
 }
 
-func (o *snapshotter) upperPath(id string) string {
+func (o *Snapshotter) upperPath(id string) string {
 	return filepath.Join(o.root, "snapshots", id, "fs")
 }
 
-func (o *snapshotter) workPath(id string) string {
+func (o *Snapshotter) workPath(id string) string {
 	return filepath.Join(o.root, "snapshots", id, "work")
 }
 
-// Close closes the snapshotter
-func (o *snapshotter) Close() error {
+// Close closes the Snapshotter
+func (o *Snapshotter) Close() error {
 	return o.ms.Close()
 }
 
