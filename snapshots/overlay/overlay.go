@@ -107,11 +107,9 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
 	}
 
 	if config.ms == nil {
+		config.ms, err = storage.NewMetaStore(filepath.Join(root, "metadata.db"))
 		if err != nil {
-			config.ms, err = storage.NewMetaStore(filepath.Join(root, "metadata.db"))
-			if err != nil {
-				return nil, err
-			}
+			return nil, err
 		}
 	}
 
