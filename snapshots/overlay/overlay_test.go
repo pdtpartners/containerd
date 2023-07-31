@@ -186,7 +186,7 @@ func testOverlayOverlayMount(t *testing.T, newSnapshotter testsuite.SnapshotterF
 }
 
 func getBasePath(ctx context.Context, sn snapshots.Snapshotter, root, key string) string {
-	o := sn.(*snapshotter)
+	o := sn.(*Snapshotter)
 	ctx, t, err := o.ms.TransactionContext(ctx, false)
 	if err != nil {
 		panic(err)
@@ -202,7 +202,7 @@ func getBasePath(ctx context.Context, sn snapshots.Snapshotter, root, key string
 }
 
 func getParents(ctx context.Context, sn snapshots.Snapshotter, root, key string) []string {
-	o := sn.(*snapshotter)
+	o := sn.(*Snapshotter)
 	ctx, t, err := o.ms.TransactionContext(ctx, false)
 	if err != nil {
 		panic(err)
