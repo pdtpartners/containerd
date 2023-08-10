@@ -55,7 +55,7 @@ func init() {
 				root = config.RootPath
 			}
 
-			var oOpts []overlay.Opt
+			var oOpts []overlay.OverlayOpt
 			if config.UpperdirLabel {
 				oOpts = append(oOpts, overlay.WithUpperdirLabel)
 			}

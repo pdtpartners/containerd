@@ -47,34 +47,42 @@ type SnapshotterConfig struct {
 	mountOptions  []string
 }
 
+type OverlayOpt interface {
+	setOverlayOpt(config *SnapshotterConfig) error
+}
+
 // Opt is an option to configure the overlay snapshotter
-type Opt func(config *SnapshotterConfig) error
+type opt func(config *SnapshotterConfig) error
+
+func (fn opt) setOverlayOpt(config *SnapshotterConfig) error {
+	return fn(config)
+}
 
 // AsynchronousRemove defers removal of filesystem content until
 // the Cleanup method is called. Removals will make the snapshot
 // referred to by the key unavailable and make the key immediately
 // available for re-use.
-func AsynchronousRemove(config *SnapshotterConfig) error {
+var AsynchronousRemove = opt(func(config *SnapshotterConfig) error {
 	config.asyncRemove = true
 	return nil
-}
+})
 
 // WithUpperdirLabel adds as an optional label
 // "containerd.io/snapshot/overlay.upperdir". This stores the location
 // of the upperdir that contains the changeset between the labelled
 // snapshot and its parent.
-func WithUpperdirLabel(config *SnapshotterConfig) error {
+var WithUpperdirLabel = opt(func(config *SnapshotterConfig) error {
 	config.upperdirLabel = true
 	return nil
-}
+})
 
 // WithMountOptions defines the default mount options used for the overlay mount.
 // NOTE: Options are not applied to bind mounts.
-func WithMountOptions(options []string) Opt {
-	return func(config *SnapshotterConfig) error {
+func WithMountOptions(options []string) OverlayOpt {
+	return opt(func(config *SnapshotterConfig) error {
 		config.mountOptions = append(config.mountOptions, options...)
 		return nil
-	}
+	})
 }
 
 type snapshotter struct {
@@ -88,10 +96,10 @@ type snapshotter struct {
 // NewSnapshotter returns a Snapshotter which uses overlayfs. The overlayfs
 // diffs are stored under the provided root. A metadata file is stored under
 // the root.
-func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
+func NewSnapshotter(root string, opts ...OverlayOpt) (snapshots.Snapshotter, error) {
 	var config SnapshotterConfig
 	for _, opt := range opts {
-		if err := opt(&config); err != nil {
+		if err := opt.setOverlayOpt(&config); err != nil {
 			return nil, err
 		}
 	}

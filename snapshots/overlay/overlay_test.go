@@ -34,7 +34,7 @@ import (
 	"github.com/containerd/containerd/snapshots/testsuite"
 )
 
-func newSnapshotterWithOpts(opts ...Opt) testsuite.SnapshotterFunc {
+func newSnapshotterWithOpts(opts ...OverlayOpt) testsuite.SnapshotterFunc {
 	return func(ctx context.Context, root string) (snapshots.Snapshotter, func() error, error) {
 		snapshotter, err := NewSnapshotter(root, opts...)
 		if err != nil {
@@ -47,7 +47,7 @@ func newSnapshotterWithOpts(opts ...Opt) testsuite.SnapshotterFunc {
 
 func TestOverlay(t *testing.T) {
 	testutil.RequiresRoot(t)
-	optTestCases := map[string][]Opt{
+	optTestCases := map[string][]OverlayOpt{
 		"no opt": nil,
 		// default in init()
 		"AsynchronousRemove": {AsynchronousRemove},
